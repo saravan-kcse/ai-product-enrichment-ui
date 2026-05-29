@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { enrichmentAPI } from '../services/api';
 import JumpHandler from './JumpHandler';
-import { Box, Button, Typography, Paper, Table, TableBody, TableCell, TableHead, TableRow, IconButton, Select, MenuItem, CircularProgress, Checkbox } from '@mui/material';
+import { Box, Button, Typography, Paper, Table, TableBody, TableCell, TableHead, TableRow, IconButton, Select, MenuItem, CircularProgress, Checkbox, FormControl, InputLabel } from '@mui/material';
 import { Delete } from '@mui/icons-material';
 
 interface PreviewHeader {
@@ -37,8 +37,9 @@ const AdminAllowablePreview: React.FC<AdminAllowablePreviewProps> = ({ onSaveAll
   const [preview, setPreview] = useState<PreviewSheet[]>([]);
   const [uploadId, setUploadId] = useState<string | undefined>(undefined);
   const [highlightedRowId, setHighlightedRowId] = useState<string | null>(null);
-  const [selectedSheetIndex, setSelectedSheetIndex] = useState<number | null>(null);
+  const [selectedSheetIndex, setSelectedSheetIndex] = useState(0);
   const [selectedAttribute, setSelectedAttribute] = useState<string | null>(null);
+  const [totalEntries, setTotalEntries] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -56,11 +57,18 @@ const AdminAllowablePreview: React.FC<AdminAllowablePreviewProps> = ({ onSaveAll
         const resp = await enrichmentAPI.getAllowablePreview(uid);
         if (resp && Array.isArray(resp)) {
           setPreview(resp);
+          setTotalEntries(null);
         } else if (resp && resp.preview && Array.isArray(resp.preview)) {
           setPreview(resp.preview);
+          setTotalEntries(typeof resp.total_entries === 'number' ? resp.total_entries : null);
+          const firstSection = resp.preview[0]?.sections?.[0]?.attribute_name;
+          setSelectedAttribute(firstSection ?? null);
         } else {
           setPreview([]);
+          setTotalEntries(null);
+          setSelectedAttribute(null);
         }
+        setSelectedSheetIndex(0);
       } catch (err:any) {
         setError('Failed to fetch preview from backend');
       } finally {
@@ -69,26 +77,22 @@ const AdminAllowablePreview: React.FC<AdminAllowablePreviewProps> = ({ onSaveAll
     })();
   }, [location.search]);
 
-  useEffect(() => {
-    // default select first sheet
-    if (preview && preview.length && selectedSheetIndex === null) setSelectedSheetIndex(0);
-  }, [preview]);
-
-  useEffect(() => {
-    // default select first attribute for the selected sheet
-    if (selectedSheetIndex === null) {
-      setSelectedAttribute(null);
-      return;
-    }
-    const sheet = preview[selectedSheetIndex];
-    if (!sheet || !sheet.sections || sheet.sections.length === 0) {
-      setSelectedAttribute(null);
-      return;
-    }
-    if (!selectedAttribute) {
-      setSelectedAttribute(sheet.sections[0].attribute_name);
-    }
+  const activeSheet = useMemo(() => {
+    if (!preview.length) return null;
+    const idx = Math.min(Math.max(0, selectedSheetIndex), preview.length - 1);
+    return preview[idx] ?? null;
   }, [preview, selectedSheetIndex]);
+
+  const sectionsToShow = useMemo((): PreviewSection[] => {
+    if (!activeSheet?.sections?.length) return [];
+    if (!selectedAttribute) return activeSheet.sections;
+    const target = selectedAttribute.trim().toLowerCase();
+    return activeSheet.sections.filter(
+      (s) => (s.attribute_name || '').trim().toLowerCase() === target,
+    );
+  }, [activeSheet, selectedAttribute]);
+
+  const showSectionHeaders = !selectedAttribute;
 
   const saveToSession = (id?: string, data?: PreviewSheet[]) => {
     // No-op: we no longer use sessionStorage for previews. Persist via save API.
@@ -151,149 +155,244 @@ const AdminAllowablePreview: React.FC<AdminAllowablePreviewProps> = ({ onSaveAll
     <Box sx={{ p: 4 }}>
       <Typography variant="h5" sx={{ mb: 2 }}>
         Admin: Allowable Preview
+        {totalEntries != null && (
+          <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 2 }}>
+            ({totalEntries.toLocaleString()} entries)
+          </Typography>
+        )}
       </Typography>
 
       <Paper sx={{ p: 2, mb: 2 }}>
-        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-          <Typography variant="subtitle1">Sheet:</Typography>
-          <Select value={selectedSheetIndex ?? ''} onChange={(e) => setSelectedSheetIndex(e.target.value === '' ? null : Number(e.target.value))} size="small" sx={{ minWidth: 140 }}>
-            {preview.map((s, idx) => (
-              <MenuItem key={`${s.sheet_name}-${idx}`} value={idx}>{s.sheet_name}</MenuItem>
-            ))}
-          </Select>
+        <Box
+          sx={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'flex-end',
+            gap: 2,
+            rowGap: 2,
+          }}
+        >
+          <FormControl size="small" sx={{ width: { xs: '100%', sm: 220 } }}>
+            <InputLabel id="preview-product-type-label">Product type</InputLabel>
+            <Select
+              labelId="preview-product-type-label"
+              label="Product type"
+              value={selectedSheetIndex}
+              onChange={(e) => {
+                const idx = Number(e.target.value);
+                setSelectedSheetIndex(idx);
+                const firstAttr = preview[idx]?.sections?.[0]?.attribute_name ?? null;
+                setSelectedAttribute(firstAttr);
+              }}
+            >
+              {preview.map((s, idx) => (
+                <MenuItem key={`${s.sheet_name}-${idx}`} value={idx}>{s.sheet_name}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
 
-          <Typography variant="subtitle1" sx={{ ml: 4 }}>Attribute:</Typography>
-            <Select value={selectedAttribute ?? ''} onChange={(e) => setSelectedAttribute(e.target.value === '' ? null : String(e.target.value))} size="small" sx={{ minWidth: 180 }}>
-            <MenuItem value="">All</MenuItem>
-            {(selectedSheetIndex !== null ? (preview[selectedSheetIndex]?.sections ?? []) : []).map((sec, idx) => (
-              <MenuItem key={`${sec.attribute_name}-${idx}`} value={sec.attribute_name}>{sec.attribute_name}</MenuItem>
-            ))}
-          </Select>
+          <FormControl size="small" sx={{ width: { xs: '100%', sm: 280 } }}>
+            <InputLabel id="preview-attribute-label">Attribute</InputLabel>
+            <Select
+              labelId="preview-attribute-label"
+              label="Attribute"
+              value={selectedAttribute ?? ''}
+              onChange={(e) => setSelectedAttribute(e.target.value === '' ? null : String(e.target.value))}
+            >
+              <MenuItem value="">All attributes</MenuItem>
+              {(activeSheet?.sections ?? []).map((sec, idx) => (
+                <MenuItem key={`${sec.attribute_name}-${idx}`} value={sec.attribute_name}>
+                  {sec.attribute_name}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
 
-          <Button variant="outlined" onClick={handleDownloadPreview} sx={{ ml: 'auto' }}>Download Preview</Button>
-          {onSaveAll && (
-            <Button variant="outlined" color="secondary" onClick={onSaveAll} disabled={savingAll || saving} sx={{ ml: 1 }}>
-              {savingAll ? 'Saving All...' : 'Save All'}
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, ml: { sm: 'auto' }, width: { xs: '100%', sm: 'auto' } }}>
+            <Button variant="outlined" onClick={handleDownloadPreview}>Download Preview</Button>
+            {onSaveAll && (
+              <Button variant="outlined" color="secondary" onClick={onSaveAll} disabled={savingAll || saving}>
+                {savingAll ? 'Saving All...' : 'Save All'}
+              </Button>
+            )}
+            <Button variant="contained" color="success" onClick={handleSave} disabled={saving || savingAll}>
+              {saving ? 'Saving...' : 'Save Changes'}
             </Button>
-          )}
-          <Button variant="contained" color="success" onClick={handleSave} disabled={saving || savingAll} sx={{ ml: 1 }}>{saving ? 'Saving...' : 'Save Changes'}</Button>
+          </Box>
         </Box>
       </Paper>
 
-        {preview.map((sheet, sheetIndex) => {
-        if (selectedSheetIndex !== null && sheetIndex !== selectedSheetIndex) return null;
+      {activeSheet && (() => {
+        const sheetIndex = Math.min(Math.max(0, selectedSheetIndex), preview.length - 1);
+        const sheet = activeSheet;
         const displayedHeaders = sheet.headers ?? [];
-        const hasProductTypes = displayedHeaders.some(h => {
-          const g = (h.gender || '').toString().trim();
-          const p = (h.product_type || '').toString().trim();
-          return p !== '' && p !== g;
-        });
+        const valueColWidth = 220;
+        const genderColMinWidth = 72;
+        const tableMinWidth = valueColWidth + displayedHeaders.length * genderColMinWidth;
+        const headerCellSx = {
+          minWidth: genderColMinWidth,
+          px: 0.5,
+          textAlign: 'center' as const,
+          verticalAlign: 'middle' as const,
+        };
+        const bodyGenderCellSx = { ...headerCellSx, py: 0.5 };
+        const valueCellSx = {
+          width: valueColWidth,
+          minWidth: valueColWidth,
+          position: 'sticky' as const,
+          left: 0,
+          zIndex: 1,
+          bgcolor: 'background.paper',
+          verticalAlign: 'middle' as const,
+        };
+
+        const renderDataRow = (section: PreviewSection, sectionIndex: number, row: PreviewRow, rowIndex: number) => {
+          const rowId = `allowable-row-${sheetIndex}-${sectionIndex}-${rowIndex}`;
+          return (
+            <TableRow
+              id={rowId}
+              key={`${section.attribute_name}-${row.attribute_value}-${rowIndex}`}
+              sx={highlightedRowId === rowId ? { backgroundColor: 'rgba(255,235,59,0.3)' } : undefined}
+            >
+              <TableCell sx={valueCellSx}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Box component="span" sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {row.attribute_value}
+                  </Box>
+                  <IconButton
+                    size="small"
+                    color="error"
+                    onClick={() => {
+                      const newPreview = [...preview];
+                      newPreview[sheetIndex].sections[sectionIndex].rows.splice(rowIndex, 1);
+                      setPreview(newPreview);
+                      saveToSession();
+                      enrichmentAPI.submitFeedback({
+                        product_id: uploadId || '',
+                        feedback_type: 'correction',
+                        attribute_name: section.attribute_name,
+                        original_prediction: row.attribute_value,
+                        corrected_value: 'DELETED',
+                        notes: `Deleted row ${row.attribute_value} in ${sheet.sheet_name}`,
+                        user_id: 'ui',
+                      }).catch(() => {});
+                    }}
+                  >
+                    <Delete fontSize="small" />
+                  </IconButton>
+                </Box>
+              </TableCell>
+              {displayedHeaders.map((h) => (
+                <TableCell key={h.column_key} align="center" sx={bodyGenderCellSx}>
+                  <Checkbox
+                    size="small"
+                    checked={!!row.cells[h.column_key]}
+                    disabled={!row.cells[h.column_key]}
+                    sx={{ p: 0.5 }}
+                    onChange={() => {
+                      if (!row.cells[h.column_key]) return;
+                      const newPreview = [...preview];
+                      const current = newPreview[sheetIndex].sections[sectionIndex].rows[rowIndex].cells;
+                      const prev = !!current[h.column_key];
+                      current[h.column_key] = !prev;
+                      setPreview(newPreview);
+                      saveToSession();
+                      enrichmentAPI.submitFeedback({
+                        product_id: uploadId || '',
+                        feedback_type: 'correction',
+                        attribute_name: section.attribute_name,
+                        original_prediction: String(prev),
+                        corrected_value: String(!prev),
+                        notes: `Toggled ${h.column_key} for ${row.attribute_value} in ${sheet.sheet_name}`,
+                        user_id: 'ui',
+                      }).catch(() => {});
+                    }}
+                  />
+                </TableCell>
+              ))}
+            </TableRow>
+          );
+        };
+
         return (
-          <Paper key={`${sheet.sheet_name}-${sheetIndex}`} sx={{ p: 2, mb: 2 }}>
-            <Typography variant="h6">{sheet.sheet_name} — {sheet.category}</Typography>
-            <Table size="small">
+          <Paper key={`${sheet.sheet_name}-${sheetIndex}`} sx={{ p: 2, mb: 2, width: '100%', overflow: 'auto' }}>
+            <Table
+              size="small"
+              stickyHeader
+              sx={{
+                tableLayout: 'fixed',
+                width: '100%',
+                minWidth: tableMinWidth,
+                '& .MuiTableCell-head': { fontWeight: 600, bgcolor: 'grey.100' },
+              }}
+            >
               <TableHead>
                 <TableRow>
-                  <TableCell rowSpan={2} sx={{ verticalAlign: 'middle' }}>Value</TableCell>
+                  <TableCell
+                    rowSpan={2}
+                    align="left"
+                    sx={{
+                      ...valueCellSx,
+                      zIndex: 3,
+                      bgcolor: 'grey.100',
+                    }}
+                  >
+                    Attribute value
+                  </TableCell>
                   {displayedHeaders.map((h) => (
-                    <TableCell key={`${h.column_key}-gender`} align="center">{h.gender || ''}</TableCell>
+                    <TableCell key={`${h.column_key}-gender`} align="center" sx={headerCellSx}>
+                      {h.gender || ''}
+                    </TableCell>
                   ))}
                 </TableRow>
-                {hasProductTypes && (
-                  <TableRow>
-                    {displayedHeaders.map((h) => (
-                      <TableCell key={`${h.column_key}-ptype`} align="center">{h.product_type || ''}</TableCell>
-                    ))}
-                  </TableRow>
-                )}
+                <TableRow>
+                  {displayedHeaders.map((h) => (
+                    <TableCell
+                      key={`${h.column_key}-ptype`}
+                      align="center"
+                      sx={{ ...headerCellSx, fontSize: '0.75rem', color: 'text.secondary', lineHeight: 1.2 }}
+                    >
+                      {h.product_type || sheet.sheet_name || ''}
+                    </TableCell>
+                  ))}
+                </TableRow>
               </TableHead>
               <TableBody>
-                {(() => {
-                  const sectionsToShow = ((): PreviewSection[] => {
-                    const sheetSections = sheet.sections ?? [];
-                    if (!selectedAttribute) return sheetSections;
-                    const target = selectedAttribute.trim().toLowerCase();
-                    return sheetSections.filter(s => (s.attribute_name || '').trim().toLowerCase() === target);
-                  })();
-                  if (!sectionsToShow || sectionsToShow.length === 0) {
-                    return (
-                      <TableRow>
-                        <TableCell colSpan={1 + displayedHeaders.length}>
-                          <em>No records for selected attribute.</em>
-                        </TableCell>
-                      </TableRow>
+                {sectionsToShow.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={1 + displayedHeaders.length}>
+                      <em>No records for selected attribute.</em>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  sectionsToShow.map((section) => {
+                    const sectionIndex = sheet.sections.findIndex(
+                      (s) => s.attribute_name === section.attribute_name,
                     );
-                  }
-
-                  return sectionsToShow.map((section, sectionIndex) => (
-                    <React.Fragment key={`${section.attribute_name}-${sectionIndex}`}>
-                      <TableRow>
-                        <TableCell colSpan={1 + displayedHeaders.length} sx={{ backgroundColor: '#f5f5f5', verticalAlign: 'middle', py: 1 }}>
-                          <strong>{section.attribute_name}</strong>
-                        </TableCell>
-                      </TableRow>
-                      {(section.rows ?? []).map((row, rowIndex) => {
-                        const rowId = `allowable-row-${sheetIndex}-${sectionIndex}-${rowIndex}`;
-                        return (
-                          <TableRow id={rowId} key={`${row.attribute_value}-${rowIndex}`} sx={ highlightedRowId === rowId ? { backgroundColor: 'rgba(255,235,59,0.3)' } : {} }>
-                            <TableCell sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              {row.attribute_value}
-                              <IconButton size="small" color="error" onClick={() => {
-                                const newPreview = [...preview];
-                                newPreview[sheetIndex].sections[sectionIndex].rows.splice(rowIndex, 1);
-                                setPreview(newPreview);
-                                saveToSession();
-                                enrichmentAPI.submitFeedback({
-                                  product_id: uploadId || '',
-                                  feedback_type: 'correction',
-                                  attribute_name: section.attribute_name,
-                                  original_prediction: row.attribute_value,
-                                  corrected_value: 'DELETED',
-                                  notes: `Deleted row ${row.attribute_value} in ${sheet.sheet_name}`,
-                                  user_id: 'ui',
-                                }).catch(() => {});
-                              }}>
-                                <Delete fontSize="small" />
-                              </IconButton>
+                    return (
+                      <React.Fragment key={`${section.attribute_name}-${sectionIndex}`}>
+                        {showSectionHeaders && (
+                          <TableRow>
+                            <TableCell
+                              colSpan={1 + displayedHeaders.length}
+                              sx={{ backgroundColor: '#f5f5f5', py: 1, fontWeight: 600 }}
+                            >
+                              {section.attribute_name}
                             </TableCell>
-                            {displayedHeaders.map((h) => (
-                              <TableCell key={h.column_key} align="center">
-                                <Checkbox
-                                  size="small"
-                                  checked={!!row.cells[h.column_key]}
-                                  disabled={!row.cells[h.column_key]}
-                                  onChange={() => {
-                                    if (!row.cells[h.column_key]) return;
-                                    const newPreview = [...preview];
-                                    const current = newPreview[sheetIndex].sections[sectionIndex].rows[rowIndex].cells;
-                                    const prev = !!current[h.column_key];
-                                    current[h.column_key] = !prev;
-                                    setPreview(newPreview);
-                                    saveToSession();
-                                    enrichmentAPI.submitFeedback({
-                                      product_id: uploadId || '',
-                                      feedback_type: 'correction',
-                                      attribute_name: section.attribute_name,
-                                      original_prediction: String(prev),
-                                      corrected_value: String(!prev),
-                                      notes: `Toggled ${h.column_key} for ${row.attribute_value} in ${sheet.sheet_name}`,
-                                      user_id: 'ui',
-                                    }).catch(() => {});
-                                  }}
-                                />
-                              </TableCell>
-                            ))}
                           </TableRow>
-                        );
-                      })}
-                    </React.Fragment>
-                  ));
-                })()}
+                        )}
+                        {(section.rows ?? []).map((row, rowIndex) =>
+                          renderDataRow(section, sectionIndex, row, rowIndex),
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                )}
               </TableBody>
             </Table>
           </Paper>
         );
-      })}
+      })()}
 
       <JumpHandler
         jumpTarget={null}

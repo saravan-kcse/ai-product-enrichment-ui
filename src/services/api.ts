@@ -287,7 +287,7 @@ class EnrichmentAPI {
   }
 
   // Get discovered (draft) attributes from AI or CSV
-  async getDiscoveredAttributes(source?: 'ai_discovered' | 'csv_discovered'): Promise<any[]> {
+  async getDiscoveredAttributes(source?: 'ai_discovered' | 'csv_discovered'): Promise<unknown> {
     const params = source ? { source } : {};
     const response = await this.api.get(
       '/api/v1/taxonomy/discovered-attributes',
@@ -449,7 +449,11 @@ class EnrichmentAPI {
     // Normalize known backend shapes into the frontend preview shape
     const data = response.data;
     try {
-      return this.normalizeAllowablePreview(data);
+      const preview = this.normalizeAllowablePreview(data);
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        return { ...data, preview };
+      }
+      return preview;
     } catch (e) {
       return data;
     }
@@ -469,15 +473,19 @@ class EnrichmentAPI {
       return previewArray.map((s: any, sheetIdx: number) => {
         const sheetName = s.sheet_name || s.product_type || s.sheetName || `Sheet ${sheetIdx}`;
         const genders: string[] = Array.isArray(s.genders) ? s.genders : [];
-        const headers = genders.map((g, idx) => ({ gender: g, product_type: g, column_key: `${sheetName}_${g}_${idx}` }));
+        const headers = genders.map((g) => ({
+          gender: g,
+          product_type: sheetName,
+          column_key: `${sheetName}::${g}`,
+        }));
 
         const sections = (Array.isArray(s.sections) ? s.sections : []).map((sec: any, secIdx: number) => ({
           attribute_name: sec.attribute_name || sec.attributeName || sec.name || `Section ${secIdx}`,
           rows: (Array.isArray(sec.rows) ? sec.rows : []).map((r: any) => {
-            const allowed: string[] = Array.isArray(r.allowed_genders) ? r.allowed_genders : (Array.isArray(r.allowed_genders) ? r.allowed_genders : []);
+            const allowed: string[] = Array.isArray(r.allowed_genders) ? r.allowed_genders : [];
             const cells: Record<string, boolean> = {};
             headers.forEach((h) => {
-              cells[h.column_key] = allowed.includes(h.product_type);
+              cells[h.column_key] = allowed.includes(h.gender);
             });
             return {
               attribute_value: r.attribute_value || r.attributeValue || r.value || '',
